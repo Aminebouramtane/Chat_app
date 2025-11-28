@@ -1,0 +1,29 @@
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: chatdb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  app:
+    build: .
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: "postgresql://postgres:password@postgres:5432/chatdb"
+      PORT: 3000
+    ports:
+      - "3000:3000"
+      - "5555:5555"
+    volumes:
+      - ./:/app
+    command: sh -c "npx prisma migrate deploy && node src/server.js"
+
+volumes:
+  pgdata:

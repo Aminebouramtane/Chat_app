@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Chat Test</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 12px; }
+      .row { display:flex; gap:8px; margin-bottom:8px; }
+      input[type="text"], input[type="number"] { padding:8px; flex:1 }
+      #messages { border:1px solid #ddd; padding:8px; height:300px; overflow:auto; }
+      .msg { padding:6px; border-bottom:1px solid #f0f0f0 }
+      .self { background:#eef }
+    </style>
+  </head>
+  <body>
+    <h2>Chat Test UI</h2>
+    <div class="row">
+      <input id="senderId" type="number" placeholder="Your user id (sender)" value="1" />
+      <input id="recieverId" type="number" placeholder="Recipient id" value="2" />
+    </div>
+    <div class="row">
+      <input id="content" type="text" placeholder="Message" />
+      <button id="sendRest">Send (REST)</button>
+      <!-- <button id="connectWs">Connect WS</button>
+      <button id="sendWs" disabled>Send (WS)</button> -->
+    </div>
+    <div id="messages"></div>
+
+    <script>
+      const senderInput = document.getElementById('senderId');
+      const recieverInput = document.getElementById('recieverId');
+      const contentInput = document.getElementById('content');
+      const sendRest = document.getElementById('sendRest');
+      const connectWs = document.getElementById('connectWs');
+      const sendWs = document.getElementById('sendWs');
+      const messages = document.getElementById('messages');
+
+      function append(msg, isSelf=false){
+        const d = document.createElement('div');
+        d.className = 'msg' + (isSelf? ' self':'');
+        d.innerText = msg;
+        messages.appendChild(d);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function renderMessage(obj){
+        // obj may have .sender (with username) or senderId
+        const senderName = obj?.sender?.username || ('user:' + (obj?.senderId || obj?.sender?.id || '?'));
+        const text = `${senderName}: ${obj.content}`;
+        const isSelf = Number(senderInput.value) === Number(obj?.sender?.id || obj?.senderId);
+        append(text, isSelf);
+      }
+
+      sendRest.addEventListener('click', async ()=>{
+        const payload = {
+          senderId: Number(senderInput.value),
+          recieverId: Number(recieverInput.value),
+          content: contentInput.value
+        };
+        let res;
+        try {
+          res = await fetch('/messages', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        } catch (err) {
+          append('REST send error: network error');
+          return;
+        }
+
+        // parse response body (may contain structured error info)
+        let body = null;
+        try { body = await res.json(); } catch (e) { /* ignore parse errors */ }
+
+        if (!res.ok) {
+          // prefer structured message if available
+          if (body) {
+            if (body.error) append('REST send error: ' + (body.message || body.error));
+            else append('REST send error: ' + JSON.stringify(body));
+          } else {
+            append('REST send error: ' + res.status + ' ' + res.statusText);
+          }
+          return;
+        }
+
+        // success — server returns { status: 'ok', data: <message> }
+        const created = body?.data || body;
+        if (created) {
+          renderMessage(created);
+        } else {
+          append('REST sent (no body)', true);
+        }
+        contentInput.value = '';
+      });
+
+      let ws;
+      connectWs.addEventListener('click', ()=>{
+        if (ws && ws.readyState === WebSocket.OPEN) return append('Already connected');
+          const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+          ws = new WebSocket(url);
+          ws.addEventListener('open', ()=>{ append('WS connected'); sendWs.disabled = false; 
+            // identify the user after connecting
+            const id = Number(senderInput.value) || null;
+            if (id) ws.send(JSON.stringify({ type: 'identify', data: { userId: id } }));
+          });
+          ws.addEventListener('message', (ev)=>{
+            try {
+              const m = JSON.parse(ev.data);
+              if (m.type === 'msg') {
+                renderMessage(m.data);
+              } else if (m.type === 'ack') {
+                renderMessage(m.data);
+              } else if (m.type === 'identified') append('WS identified as ' + m.data.userId);
+              else if (m.type === 'error') append('WS error: ' + m.message);
+              else append('WS: ' + JSON.stringify(m));
+            } catch(e){ append('WS raw: ' + ev.data); }
+          });
+        ws.addEventListener('close', ()=>{ append('WS closed'); sendWs.disabled = true; });
+      });
+
+      sendWs.addEventListener('click', ()=>{
+        if (!ws || ws.readyState !== WebSocket.OPEN) return append('WS not connected');
+        // always (re)identify before sending so server has the correct mapping
+        const id = Number(senderInput.value) || null;
+        if (id) ws.send(JSON.stringify({ type: 'identify', data: { userId: id } }));
+
+        const msg = { type: 'msg', data: { senderId: Number(senderInput.value), recieverId: Number(recieverInput.value), content: contentInput.value } };
+        ws.send(JSON.stringify(msg));
+        append('WS sent: ' + contentInput.value, true);
+        contentInput.value = '';
+      });
+    </script>
+  </body>
+</html>

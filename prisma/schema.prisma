@@ -1,0 +1,59 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+ provider = "prisma-client-js"
+ binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+datasource db {
+ provider = "postgresql"
+ url = env("DATABASE_URL")
+}
+model User {
+ id Int @id @default(autoincrement())
+ username String @unique
+ email String @unique
+ passwordHash String?
+ Avatarurl String?
+ status Status @default(OFFLINE)
+ SentMessages Messages[] @relation("SentMessages")
+ RecievedMessages Messages[] @relation("RecievedMessages")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+
+  // relations
+  blocks     Block[] @relation("UserBlocks")     // users I blocked
+  blockedBy  Block[] @relation("UserBlockedBy")  // users who blocked me
+}
+
+
+model Messages {
+ id Int @id @default(autoincrement())
+ sender User @relation("SentMessages", fields: [senderId],references: [id])
+ senderId Int
+ Reciever User @relation("RecievedMessages", fields: [RecieverId],references: [id])
+ RecieverId Int
+ content String
+ isDeleted Boolean @default(false)
+ CreatedAt DateTime @default(now())
+}
+model Block {
+  id         Int      @id @default(autoincrement())
+  blockerId  Int
+  blockedId  Int
+  createdAt  DateTime @default(now())
+
+  blocker    User     @relation("UserBlocks", fields: [blockerId], references: [id])
+  blocked    User     @relation("UserBlockedBy", fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+}
+
+enum Status {
+ OFFLINE
+ ONLINE
+ In_Game
+}
