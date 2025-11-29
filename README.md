@@ -67,4 +67,19 @@ Designed to fit the ft_transcendence architecture and evaluation requirements.
 ---
 
 # 📁 Project Structure
+backend/
+  src/
+    server.ts
+    auth.ts
+    ws.ts
+    prismaClient.ts
+    routes/
+      users.ts
+      chats.ts
+  prisma/
+    schema.prisma
+  Dockerfile
+  docker-compose.yml
+  package.json
+  README.md
 
