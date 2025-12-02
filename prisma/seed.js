@@ -1,10 +1,13 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 async function main() {
-await prisma.user.createMany({
+    await prisma.user.createMany({
     data: [
         { username: 'alice', email: 'alice@example.com', passwordHash: 'x' },
-        { username: 'bob', email: 'bob@example.com', passwordHash: 'x' }
+        { username: 'bob', email: 'bob@example.com', passwordHash: 'x' },
+        { username: 'carol', email: 'carol@example.com', passwordHash: 'x' },
+        { username: 'dave', email: 'dave@example.com', passwordHash: 'x' },
+        { username: 'eve', email: 'eve@example.com', passwordHash: 'x' }
         ],
         skipDuplicates: true,
     });

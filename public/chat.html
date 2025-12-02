@@ -4,58 +4,283 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Chat Test</title>
-    <style>
-      body { font-family: Arial, sans-serif; padding: 12px; }
-      .row { display:flex; gap:8px; margin-bottom:8px; }
-      input[type="text"], input[type="number"] { padding:8px; flex:1 }
-      #messages { border:1px solid #ddd; padding:8px; height:300px; overflow:auto; }
-      .msg { padding:6px; border-bottom:1px solid #f0f0f0 }
-      .self { background:#eef }
-    </style>
+    <link rel="stylesheet" href="./chat.css" />
   </head>
   <body>
     <h2>Chat Test UI</h2>
     <div class="row">
-      <input id="senderId" type="number" placeholder="Your user id (sender)" value="1" />
-      <input id="recieverId" type="number" placeholder="Recipient id" value="2" />
+      <div>You: <strong><span id="currentUser">-</span></strong><small id="currentStatus" style="margin-left:8px;color:#666"> (offline)</small></div>
+      <div id="recipientStatus" style="min-width:160px;align-self:center;color:#666">Recipient: unknown</div>
+      <div style="margin-left:16px">
+        <strong>Users</strong>
+        <div id="usersList"></div>
+        <div style="margin-top:6px">
+          <button id="refreshUsers">Refresh</button>
+          <button id="seedUsers">Seed Users</button>
+        </div>
+      </div>
     </div>
     <div class="row">
       <input id="content" type="text" placeholder="Message" />
       <button id="sendRest">Send (REST)</button>
-      <!-- <button id="connectWs">Connect WS</button>
-      <button id="sendWs" disabled>Send (WS)</button> -->
+      <button id="connectWs">Connect WS</button>
+      <button id="sendWs" disabled>Send (WS)</button>
+      <button id="loadConv">Load Conversation</button>
     </div>
     <div id="messages"></div>
+    <div style="margin-top:6px">
+      <span id="loadingIndicator" class="hidden"><span class="spinner"></span> Loading...</span>
+      <span id="lastUpdated"></span>
+    </div>
 
     <script>
-      const senderInput = document.getElementById('senderId');
-      const recieverInput = document.getElementById('recieverId');
+      // current user/recipient are stored in variables (no visible numeric inputs)
+      const currentUserEl = document.getElementById('currentUser');
       const contentInput = document.getElementById('content');
       const sendRest = document.getElementById('sendRest');
       const connectWs = document.getElementById('connectWs');
       const sendWs = document.getElementById('sendWs');
       const messages = document.getElementById('messages');
+      const currentStatusEl = document.getElementById('currentStatus');
+      const loadConvBtn = document.getElementById('loadConv');
+      let currentUser = null;
+      let currentRecipient = null;
+      const usersListEl = document.getElementById('usersList');
+      let convoPoll = null;
+      const renderedMessageIds = new Set();
+      let lastLoadTs = 0;
+      const refreshUsersBtn = document.getElementById('refreshUsers');
+      const seedUsersBtn = document.getElementById('seedUsers');
+      let reidentifyAttempts = 0;
 
-      function append(msg, isSelf=false){
+      function escapeHtml(str){
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function append(msgHtml, isSelf=false){
+        const atBottom = (messages.scrollTop + messages.clientHeight) >= (messages.scrollHeight - 40);
         const d = document.createElement('div');
-        d.className = 'msg' + (isSelf? ' self':'');
-        d.innerText = msg;
+        d.className = 'msg' + (isSelf? ' self':'') + ' new';
+        d.innerHTML = msgHtml;
         messages.appendChild(d);
-        messages.scrollTop = messages.scrollHeight;
+        if (atBottom) messages.scrollTop = messages.scrollHeight;
+        // remove 'new' marker after animation
+        setTimeout(()=>{ try{ d.classList.remove('new'); }catch(e){} }, 800);
       }
 
       function renderMessage(obj){
         // obj may have .sender (with username) or senderId
-        const senderName = obj?.sender?.username || ('user:' + (obj?.senderId || obj?.sender?.id || '?'));
-        const text = `${senderName}: ${obj.content}`;
-        const isSelf = Number(senderInput.value) === Number(obj?.sender?.id || obj?.senderId);
-        append(text, isSelf);
+          // avoid rendering duplicates if the message id was already rendered
+          if (obj && obj.id) {
+            if (renderedMessageIds.has(String(obj.id))) return;
+            renderedMessageIds.add(String(obj.id));
+          }
+          // obj may have .sender (with username) or senderId
+          const senderName = obj?.sender?.username || ('user:' + (obj?.senderId || obj?.sender?.id || '?'));
+          const time = obj?.CreatedAt ? new Date(obj.CreatedAt).toLocaleString() : '';
+          const content = obj?.content || '';
+          const isSelf = Number(currentUser) === Number(obj?.sender?.id || obj?.senderId);
+          const html = `<strong>${escapeHtml(senderName)}</strong> <small>[${escapeHtml(time)}]</small>: ${escapeHtml(content)}`;
+          append(html, isSelf);
+      }
+
+      // render users list
+      function renderUsersList(users){
+        if (!usersListEl) return;
+        usersListEl.innerHTML = '';
+        // exclude the current logged-in user from the list
+        const filtered = Array.isArray(users) ? users.filter(u => String(u.id) !== String(currentUser)) : users;
+        (filtered || []).forEach(u => {
+          const id = String(u.id);
+          const el = document.createElement('div');
+          el.style.display = 'flex';
+          el.style.justifyContent = 'space-between';
+          el.style.alignItems = 'center';
+          el.style.padding = '6px 4px';
+          el.style.cursor = 'pointer';
+          el.dataset.userid = id;
+          // avatar + name
+          const left = document.createElement('div');
+          left.style.display = 'flex';
+          left.style.alignItems = 'center';
+          const avatar = document.createElement('img');
+          avatar.style.width = '28px';
+          avatar.style.height = '28px';
+          avatar.style.borderRadius = '50%';
+          avatar.style.objectFit = 'cover';
+          avatar.style.marginRight = '8px';
+          avatar.src = u.Avatarurl || 'https://www.gravatar.com/avatar/' + (u.email ? encodeURIComponent(u.email) : '') + '?d=mp&s=64';
+          avatar.alt = u.username || 'user';
+          const name = document.createElement('span');
+          name.textContent = u.username + ' (' + id + ')';
+          left.appendChild(avatar);
+          left.appendChild(name);
+          const status = document.createElement('small');
+          status.style.marginLeft = '8px';
+          // console.log("=============== ", window.__onlineUsers, " =========== ", !window.__onlineUsers.has(id));
+
+
+        try{
+          if (!status) return;
+          const set = window.__onlineUsers || new Set();
+          // fallback to server-reported `u.status` if presence set is empty
+          const online = set.has(String(id)) || (u && u.status && String(u.status).toUpperCase() === 'ONLINE');
+          status.textContent = online ? 'online' : 'offline';
+          status.style.color = online ? 'green' : 'red';
+        } catch(e) {}
+
+
+          // status.textContent = (window.__onlineUsers && window.__onlineUsers.has(id)) ? 'online' : 'offlineeeeeeeeeeeeee';
+          // status.style.color = window.__onlineUsers && window.__onlineUsers.has(id) ? 'green' : '#666';
+          el.appendChild(left);
+          el.appendChild(status);
+          el.addEventListener('click', async ()=>{
+            // select this user as recipient
+            currentRecipient = Number(id);
+            updateRecipientStatus();
+            try { localStorage.setItem('chat_selected_recipient', id); } catch(e){}
+            // visually highlight
+            Array.from(usersListEl.children).forEach(ch => ch.style.background='');
+            el.style.background = '#f0f8ff';
+            // start auto-refresh for this conversation (initial load will clear)
+            startConversationAutoRefresh(currentRecipient);
+          });
+          usersListEl.appendChild(el);
+        });
+        // refresh badges once rendered
+        refreshUsersBadges();
+        // restore previously selected recipient if any (don't restore if it equals currentUser)
+        try {
+          const saved = localStorage.getItem('chat_selected_recipient');
+          if (saved && String(saved) !== String(currentUser)) {
+            const el = Array.from(usersListEl.children).find(ch => ch.dataset.userid === saved);
+            if (el) { el.click(); }
+          }
+        } catch(e){}
+      }
+
+      // helpers to refresh or seed users remotely
+      async function loadUsers(){
+        try{
+          const res = await fetch('/users');
+          if (!res.ok) throw new Error('failed');
+          const list = await res.json();
+          // Initialize presence set from server-side `status` field so REST updates reflect immediately
+          try {
+            window.__onlineUsers = new Set((list || []).filter(u => String(u.status).toUpperCase() === 'ONLINE').map(u => String(u.id)));
+          } catch (e) {
+            window.__onlineUsers = new Set();
+          }
+          renderUsersList(list || []);
+        } catch(e) { append('Failed to load users'); }
+      }
+
+      if (refreshUsersBtn) refreshUsersBtn.addEventListener('click', ()=> loadUsers());
+      if (seedUsersBtn) seedUsersBtn.addEventListener('click', async ()=>{
+        try{
+          const res = await fetch('/users/seed', { method: 'POST' });
+          if (!res.ok) throw new Error('seed failed');
+          // reload users so presence is initialized from server status
+          await loadUsers();
+          append('Seeded users');
+        } catch(e){ append('Seed users failed'); }
+      });
+
+      // Load conversation helper (oldest messages first). opts: { clear }
+      async function loadConversation(withUserId, opts = { clear: false }){
+        if (!currentUser) return append('You must enter your user ID first');
+        if (!withUserId) return append('No recipient selected');
+        const a = Number(currentUser);
+        const b = Number(withUserId);
+        const shouldClear = !!opts.clear;
+        if (shouldClear) {
+          messages.innerHTML = '';
+          renderedMessageIds.clear();
+        }
+        const loadingEl = document.getElementById('loadingIndicator');
+        if (loadingEl) loadingEl.classList.remove('hidden');
+        try {
+          const res = await fetch(`/messages/conversation?userA=${a}&userB=${b}`);
+          if (!res.ok) {
+            if (shouldClear) append('There are no messages or user does not exist');
+            return;
+          }
+          const body = await res.json();
+          if (!Array.isArray(body) || body.length === 0) {
+            if (shouldClear) append('There are no messages or user does not exist');
+            return;
+          }
+          // determine if user is scrolled near bottom; if so we'll auto-scroll after append
+          const nearBottom = (messages.scrollTop + messages.clientHeight) >= (messages.scrollHeight - 40);
+          for (const m of body) renderMessage(m);
+          // update last updated
+          lastLoadTs = Date.now();
+          const lastEl = document.getElementById('lastUpdated');
+          if (lastEl) lastEl.textContent = 'Last updated: ' + new Date(lastLoadTs).toLocaleTimeString();
+          if (nearBottom) messages.scrollTop = messages.scrollHeight;
+        } catch (e) {
+          if (shouldClear) append('Failed to load conversation');
+        } finally {
+          if (loadingEl) loadingEl.classList.add('hidden');
+        }
+      }
+
+      function startConversationAutoRefresh(withUserId){
+        stopConversationAutoRefresh();
+        if (!withUserId) return;
+        // initial load that clears existing messages
+        loadConversation(withUserId, { clear: true });
+        convoPoll = setInterval(()=>{
+          loadConversation(withUserId, { clear: false });
+        }, 2500);
+      }
+
+      function stopConversationAutoRefresh(){
+        if (convoPoll) { clearInterval(convoPoll); convoPoll = null; }
+      }
+
+      // function refreshUsersBadges(){
+      //   if (!usersListEl) return;
+      //   const set = window.__onlineUsers || new Set();
+      //   Array.from(usersListEl.children).forEach(ch => {
+      //     const id = ch.dataset.userid;
+      //     const small = ch.querySelector('small');
+      //     if (!small) return;
+      //     const online = set.has(String(id));
+          
+      //     small.textContent = online ? 'online' : 'offline____';
+      //     small.style.color = online ? 'green' : '#666';
+      //   });
+      //   // also update the logged-in user's own status element
+      //   try { updateCurrentStatusFromPresence(); } catch(e) {}
+      // }
+
+      function updateCurrentStatusFromPresence(){
+        try{
+          if (!currentStatusEl) return;
+          const set = window.__onlineUsers || new Set();
+          if (!currentUser) { currentStatusEl.textContent = ' (offline)'; currentStatusEl.style.color = '#666'; return; }
+          if (set.has(String(currentUser))) {
+            currentStatusEl.textContent = ' (online)';
+            currentStatusEl.style.color = 'green';
+          }
+        }catch(e){}
       }
 
       sendRest.addEventListener('click', async ()=>{
+        // require currentUser and selected recipient
+        if (!currentUser) return append('You must enter your user ID first (reload the page)');
+        if (!currentRecipient) {
+          return append('Select a recipient from the Users list');
+        }
         const payload = {
-          senderId: Number(senderInput.value),
-          recieverId: Number(recieverInput.value),
+          senderId: Number(currentUser),
+          recieverId: currentRecipient,
           content: contentInput.value
         };
         let res;
@@ -91,41 +316,208 @@
         contentInput.value = '';
       });
 
+      // Load conversation between senderId and recieverId (oldest messages first)
+      if (loadConvBtn) {
+        loadConvBtn.addEventListener('click', async ()=>{
+          if (!currentUser) return append('You must enter your user ID first (reload the page)');
+          const a = Number(currentUser);
+          const b = currentRecipient || await (async ()=>{
+            const raw = window.prompt('Enter other user id to load conversation with:');
+            if (raw === null) return null;
+            return Number(raw);
+          })();
+          messages.innerHTML = '';
+          if (!b || !a) return append('There are no messages or user does not exist');
+          try {
+            const res = await fetch(`/messages/conversation?userA=${a}&userB=${b}`);
+            const body = await (res.headers.get('content-type')?.includes('application/json') ? res.json() : null);
+            if (!res.ok) {
+              append('There are no messages or user does not exist');
+              return;
+            }
+            if (!Array.isArray(body) || body.length === 0) {
+              append('There are no messages or user does not exist');
+              return;
+            }
+            for (const m of body) renderMessage(m);
+          } catch (e) {
+            append('There are no messages or user does not exist');
+          }
+        });
+      }
+
       let ws;
-      connectWs.addEventListener('click', ()=>{
+
+      function connectWebSocket(){
         if (ws && ws.readyState === WebSocket.OPEN) return append('Already connected');
-          const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-          ws = new WebSocket(url);
-          ws.addEventListener('open', ()=>{ append('WS connected'); sendWs.disabled = false; 
-            // identify the user after connecting
-            const id = Number(senderInput.value) || null;
-            if (id) ws.send(JSON.stringify({ type: 'identify', data: { userId: id } }));
-          });
-          ws.addEventListener('message', (ev)=>{
-            try {
-              const m = JSON.parse(ev.data);
-              if (m.type === 'msg') {
-                renderMessage(m.data);
-              } else if (m.type === 'ack') {
-                renderMessage(m.data);
-              } else if (m.type === 'identified') append('WS identified as ' + m.data.userId);
-              else if (m.type === 'error') append('WS error: ' + m.message);
-              else append('WS: ' + JSON.stringify(m));
-            } catch(e){ append('WS raw: ' + ev.data); }
-          });
-        ws.addEventListener('close', ()=>{ append('WS closed'); sendWs.disabled = true; });
-      });
+        const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+        ws = new WebSocket(url);
+        ws.addEventListener('open', ()=>{
+          append('WS connected');
+          sendWs.disabled = false;
+          // identify the user after connecting
+          const id = Number(currentUser) || null;
+          if (id) {
+            reidentifyAttempts = 0;
+            const tryIdentify = ()=>{
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              reidentifyAttempts++;
+              console.debug('WS: sending identify attempt', reidentifyAttempts, 'for', id);
+              ws.send(JSON.stringify({ type: 'identify', data: { userId: id } }));
+              // optimistic UI update
+              try { if (currentStatusEl) { currentStatusEl.textContent = ' (online)'; currentStatusEl.style.color = 'green'; } } catch(e){}
+              // check presence after a short delay; if not present, try again up to 3 times
+              setTimeout(()=>{
+                try { updateCurrentStatusFromPresence(); } catch(e){}
+                const set = window.__onlineUsers || new Set();
+                if (!set.has(String(id)) && reidentifyAttempts < 3) {
+                  tryIdentify();
+                }
+              }, 700);
+            };
+            tryIdentify();
+          }
+        });
+        ws.addEventListener('message', (ev)=>{
+          try {
+            const m = JSON.parse(ev.data);
+              // presence updates
+              if (m.type === 'presence_list') {
+                console.debug('WS: presence_list', m.data);
+                // initialize online set
+                window.__onlineUsers = new Set(m.data.map(String));
+                updateRecipientStatus();
+                refreshUsersBadges();
+                return;
+              }
+              if (m.type === 'presence') {
+                console.debug('WS: presence', m.data);
+                window.__onlineUsers = window.__onlineUsers || new Set();
+                const id = String(m.data.userId);
+                if (m.data.status === 'online') window.__onlineUsers.add(id);
+                else window.__onlineUsers.delete(id);
+                updateRecipientStatus();
+                refreshUsersBadges();
+                return;
+              }
+              if (m.type === 'delivered') {
+                const info = m.data || {};
+                append(`Message ${info.messageId} delivered to ${info.toUserId}`);
+                return;
+              }
+            if (m.type === 'msg') {
+              renderMessage(m.data);
+            } else if (m.type === 'ack') {
+              renderMessage(m.data);
+              } else if (m.type === 'identified') {
+                // mark own status as online in UI
+                try {
+                  if (currentStatusEl) { currentStatusEl.textContent = ' (online)'; currentStatusEl.style.color = 'green'; }
+                } catch(e){}
+                append('WS identified as ' + m.data.userId);
+              }
+            else if (m.type === 'error') append('WS error: ' + m.message);
+            else append('WS: ' + JSON.stringify(m));
+          } catch(e){ append('WS raw: ' + ev.data); }
+        });
+          // ws.addEventListener('close', ()=>{ append('WS closed'); sendWs.disabled = true; try{ if (currentStatusEl) { currentStatusEl.textContent = ' (offline)'; currentStatusEl.style.color = '#666'; } }catch(e){} });
+      }
+
+      connectWs.addEventListener('click', ()=>connectWebSocket());
 
       sendWs.addEventListener('click', ()=>{
         if (!ws || ws.readyState !== WebSocket.OPEN) return append('WS not connected');
         // always (re)identify before sending so server has the correct mapping
-        const id = Number(senderInput.value) || null;
+        const id = Number(currentUser) || null;
         if (id) ws.send(JSON.stringify({ type: 'identify', data: { userId: id } }));
-
-        const msg = { type: 'msg', data: { senderId: Number(senderInput.value), recieverId: Number(recieverInput.value), content: contentInput.value } };
+        // require a selected recipient
+        if (!currentRecipient) return append('Select a recipient from the Users list');
+        const recId = String(Number(currentRecipient));
+        const online = (window.__onlineUsers || new Set()).has(recId);
+        const msg = { type: 'msg', data: { senderId: Number(currentUser), recieverId: Number(currentRecipient), content: contentInput.value } };
+        if (!online) {
+          append('Recipient appears offline — message will be stored; consider sending via REST');
+        }
         ws.send(JSON.stringify(msg));
         append('WS sent: ' + contentInput.value, true);
         contentInput.value = '';
+        // ensure conversation is refreshed after sending
+        if (currentRecipient) {
+          // small delay to allow server to persist and broadcast
+          setTimeout(()=>{
+            // if server broadcast arrives via WS it will be appended; reload to be safe
+            loadConversation(currentRecipient, { clear: false });
+          }, 500);
+        }
+      });
+
+      // recipient status helper
+      function updateRecipientStatus(){
+        const statusEl = document.getElementById('recipientStatus');
+        const rec = currentRecipient ? String(Number(currentRecipient)) : '';
+        const online = (window.__onlineUsers || new Set()).has(rec);
+        if (!rec) {
+          statusEl.textContent = 'Recipient: unknown';
+          statusEl.style.color = '#666';
+        } else if (online) {
+          statusEl.textContent = `Recipient: ${rec} (online)`;
+          statusEl.style.color = 'green';
+        } else {
+          statusEl.textContent = `Recipient: ${rec} (offline)`;
+          statusEl.style.color = 'red';
+        }
+      }
+
+      
+      // On page load, prompt the user for their ID and auto-enter the chat (connect WS)
+      window.addEventListener('DOMContentLoaded', ()=>{
+        setTimeout(()=>{
+          let id = null;
+          while (!id) {
+            const raw = window.prompt('Enter your user ID to join the chat:');
+            if (raw === null) {
+              // user cancelled; keep the input blank and do nothing
+              append('You cancelled ID entry. You can click "Load Conversation" or enter an ID later.');
+              return;
+            }
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n <= 0) {
+              alert('Please enter a valid positive numeric user ID');
+              continue;
+            }
+            id = n;
+          }
+          currentUser = id;
+          if (currentUserEl) currentUserEl.textContent = String(id);
+          // Immediately mark this user online via REST so UI and DB reflect it
+          try {
+            (async ()=>{
+              try {
+                const res = await fetch('/users/' + String(id) + '/online', { method: 'POST' });
+                let body = null;
+                try { body = await res.json(); } catch(e) { body = null; }
+                console.log('POST /users/' + id + '/online =>', res.status, res.statusText, body);
+                if (res.ok) {
+                  if (currentStatusEl) { currentStatusEl.textContent = ' (online)'; currentStatusEl.style.color = 'green'; }
+                  // optimistically update presence set so UI updates immediately
+                  try { window.__onlineUsers = window.__onlineUsers || new Set(); window.__onlineUsers.add(String(id)); } catch(e){}
+                  refreshUsersBadges();
+                  // refresh users list to see authoritative updated status
+                  await loadUsers();
+                } else {
+                  append('Failed to mark online: ' + (body?.error || res.status + ' ' + res.statusText));
+                }
+              } catch (err) {
+                console.error('Error calling /users/:id/online', err);
+                append('Failed to mark online: network error');
+              }
+            })();
+          } catch(e){}
+          // auto-connect WebSocket and identify
+          connectWebSocket();
+          // fetch users list and initialize presence
+          loadUsers();
+        }, 50);
       });
     </script>
   </body>

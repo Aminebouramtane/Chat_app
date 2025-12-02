@@ -12,6 +12,7 @@ fastify.get('/', async (req, reply) => {
   return { message: 'OK', routes: ['/users', '/messages'] };
 });
 
+
 // Serve simple chat test page
 fastify.get('/chat', async (req, reply) => {
   const fs = require('fs');

@@ -1,0 +1,22 @@
+body { font-family: Arial, sans-serif; padding: 12px; background: #fafafa; color: #111 }
+.row { display:flex; gap:8px; margin-bottom:8px; }
+input[type="text"], input[type="number"] { padding:8px; flex:1 }
+#messages { border:1px solid #ddd; padding:8px; height:300px; overflow:auto; background:#fff }
+.msg { padding:6px; border-bottom:1px solid #f0f0f0 }
+.msg small { color: #666; margin-left:6px; font-size: 0.85em }
+.self { background:#eef }
+#usersList { max-height:140px; overflow:auto; border:1px solid #eee; padding:6px; width:220px; background:#fff }
+#usersList div { transition: background .15s ease }
+#usersList img { border:1px solid #ddd }
+#recipientStatus { min-width:160px; align-self:center; color:#666 }
+button { padding:8px 10px; }
+/* loading spinner */
+.spinner { display:inline-block; width:18px; height:18px; border:3px solid rgba(0,0,0,0.12); border-top-color: #333; border-radius:50%; animation: spin 1s linear infinite; vertical-align:middle }
+@keyframes spin { to { transform: rotate(360deg); } }
+.hidden { display:none }
+/* message fade-in */
+.msg { opacity: 1; transition: background .15s ease, opacity .25s ease; }
+.msg.new { animation: fadeIn 300ms ease; background: #f7fff7 }
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+#messages { position: relative }
+#lastUpdated { font-size: 0.85em; color: #666; margin-top:6px }

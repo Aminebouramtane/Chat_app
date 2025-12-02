@@ -37,6 +37,7 @@ model Messages {
  Reciever User @relation("RecievedMessages", fields: [RecieverId],references: [id])
  RecieverId Int
  content String
+  delivered Boolean @default(false)
  isDeleted Boolean @default(false)
  CreatedAt DateTime @default(now())
 }
